@@ -1357,49 +1357,269 @@ def parse_recommendation_string(rec_str):
             parsed_batches.append(ids)
 
     return parsed_batches
-def kaggle_list_submissions():
-    """
-    Récupère les submissions Kaggle pour la compétition et les retourne en DataFrame.
-    Nécessite :
-      - kaggle CLI installé
-      - ~/.kaggle/kaggle.json configuré (manuellement, pas via l'app)
-    """
-    cmd = [
-        "kaggle", "competitions", "submissions",
-        "-c", KAGGLE_COMP,
-        "--csv",
+
+def prepare_kaggle_submissions_view(df_sub: pd.DataFrame) -> pd.DataFrame:
+    if df_sub is None or df_sub.empty:
+        return None
+
+    df = df_sub.copy()
+
+    # --- Normalisation noms de colonnes selon versions Kaggle ---
+    rename_map = {
+        "teamName": "team",
+        "TeamName": "team",
+        "description": "description",
+        "submissionDescription": "description",
+        "publicScore": "public_score",
+        "PublicScore": "public_score",
+        "date": "date",
+        "submissionDate": "date",
+        "submittedBy": "submitted_by",
+        "SubmittedBy": "submitted_by",
+        "status": "status",
+        "Status": "status",
+    }
+
+    for k, v in rename_map.items():
+        if k in df.columns:
+            df = df.rename(columns={k: v})
+
+    required_cols = [
+        "public_score",
+        "team",
+        "description",
+        "submitted_by",
+        "status",
+        "date",
     ]
 
+    # Garder uniquement les colonnes présentes
+    df = df[[c for c in required_cols if c in df.columns]]
+
+    # --- Nettoyage ---
+    df = df[df["public_score"].notna()]  # score != NaN
+    df["public_score"] = pd.to_numeric(df["public_score"], errors="coerce")
+    df = df[df["public_score"].notna()]
+
+    # Date propre
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # Tri chronologique
+    df = df.sort_values("date" if "date" in df.columns else "public_score")
+
+    return df.reset_index(drop=True)
+
+
+def render_kaggle_submissions_table(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.info("Aucune submission valide avec score public.")
+        return
+
+    df_display = df.copy()
+
+    # Identifier le meilleur score
+    best_score = df_display["public_score"].max()
+
+    def highlight_best(row):
+        if row["public_score"] == best_score:
+            return [
+                "background: linear-gradient(90deg, rgba(34,197,94,0.35), rgba(16,185,129,0.25));"
+                "color: #ecfdf5;"
+                "font-weight: 700;"
+                "border-left: 6px solid #22c55e;"
+                "box-shadow: inset 0 0 18px rgba(34,197,94,0.6);"
+            ] * len(row)
+        return [""] * len(row)
+
+    if "date" in df_display.columns:
+        df_display["date"] = df_display["date"].dt.strftime("%Y-%m-%d %H:%M")
+
+    df_display = df_display.rename(columns={
+        "public_score": "🏅 Public score",
+        "team": "👥 Team",
+        "description": "📝 Description",
+        "submitted_by": "🙋 Submitted by",
+        "status": "📌 Status",
+        "date": "🕒 Date",
+    })
+
+    # Ajouter une colonne badge
+    df_display["⭐"] = df["public_score"].apply(
+        lambda s: "👑 BEST" if s == best_score else ""
+    )
+
+    styled_df = (
+        df_display
+        .style
+        .apply(highlight_best, axis=1)
+        .format({"🏅 Public score": "{:.5f}"})
+    )
+
+    st.markdown("#### 👑 Meilleure submission mise en évidence")
+    st.dataframe(styled_df, height=360, use_container_width=True)
+
+def render_kaggle_score_progression(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.info("Aucune donnée pour le graphique.")
+        return
+
+    if "public_score" not in df.columns:
+        st.error("❌ Colonne 'public_score' introuvable pour le graphique.")
+        st.write("Colonnes reçues :", list(df.columns))
+        return
+
+    # garder uniquement scores valides
+    dfp = df.copy()
+    dfp["public_score"] = pd.to_numeric(dfp["public_score"], errors="coerce")
+    dfp = dfp[dfp["public_score"].notna()]
+    if len(dfp) < 2:
+        st.info("Pas assez de submissions valides pour afficher une progression.")
+        return
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    scores = dfp["public_score"].values
+    x = np.arange(1, len(scores) + 1)
+
+    fig, ax = plt.subplots(figsize=(8, 4), facecolor="#020617")
+    ax.set_facecolor("#020617")
+
+    # Glow “LED” (superposition)
+    for lw, alpha in [(10, 0.06), (7, 0.10), (5, 0.14)]:
+        ax.plot(x, scores, linewidth=lw, alpha=alpha)
+
+    ax.plot(x, scores, linewidth=2.8, marker="o")
+    ax.scatter(x[-1], scores[-1], s=180, zorder=6)
+
+    # texte “dernier score”
+    ax.annotate(
+        f"Dernier score  {scores[-1]:.5f}",
+        (x[-1], scores[-1]),
+        xytext=(0, 18),
+        textcoords="offset points",
+        ha="center",
+        fontsize=10,
+        fontweight="bold",
+        color="#e5e7eb",
+        bbox=dict(boxstyle="round,pad=0.45", fc="#020617", ec="#60a5fa", lw=1.2),
+    )
+
+    # Axe / grid
+    ax.set_title("📈 Progression du score public Kaggle", fontsize=14, pad=14, color="#e5e7eb")
+    ax.set_xlabel("Submission #", labelpad=8, color="#94a3b8")
+    ax.set_ylabel("Public score", labelpad=8, color="#94a3b8")
+
+    ax.tick_params(colors="#94a3b8")
+    ax.grid(True, alpha=0.10)
+
+    for spine in ax.spines.values():
+        spine.set_alpha(0.25)
+        spine.set_color("#94a3b8")
+
+    st.pyplot(fig)
+
+def kaggle_list_submissions():
+    """
+    Récupère les submissions Kaggle pour la compétition et les retourne en DataFrame,
+    SANS utiliser la CLI (plus robuste en prod).
+
+    Requiert:
+      - package `kaggle` installé
+      - credentials Kaggle disponibles (env vars ou ~/.kaggle/kaggle.json)
+    """
+    import inspect
+    import pandas as pd
+    import streamlit as st
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except FileNotFoundError:
-        st.error(
-            "❌ La commande `kaggle` n'est pas disponible sur ce serveur.\n\n"
-            "Configure-la sur la machine locale (ou sur Streamlit Cloud) avec `kaggle.json`."
-        )
-        return None
-    except subprocess.CalledProcessError as e:
-        st.error("❌ Erreur lors de la récupération des submissions Kaggle.")
-        st.code(e.stderr or e.stdout, language="bash")
+        api = KaggleApi()
+        api.authenticate()
+    except Exception as e:
+        st.error("❌ Impossible d'authentifier KaggleApi (credentials manquants ou invalides).")
+        st.code(str(e))
         return None
 
-    if not result.stdout.strip():
+    # --- Compatibilité signatures selon version kaggle ---
+    try:
+        sig = inspect.signature(api.competition_submissions)
+        params = sig.parameters
+
+        kwargs = {}
+
+        # Page (diffère selon versions)
+        if "page_number" in params:
+            kwargs["page_number"] = 1
+        elif "page" in params:
+            kwargs["page"] = 1
+
+        # Pagination token (parfois présent)
+        if "page_token" in params:
+            kwargs["page_token"] = None
+
+        # Taille page (parfois présent)
+        if "page_size" in params:
+            kwargs["page_size"] = 100
+
+        subs = api.competition_submissions(KAGGLE_COMP, **kwargs)
+
+    except Exception as e:
+        st.error("❌ Erreur lors de la récupération des submissions via KaggleApi.")
+        st.code(str(e))
+        return None
+
+    if not subs:
         st.info("Aucune submission trouvée sur Kaggle.")
         return None
 
-    try:
-        df = pd.read_csv(io.StringIO(result.stdout))
-        return df
-    except Exception as e:
-        st.error(f"Impossible de parser les submissions Kaggle : {e}")
-        # On montre un extrait brut pour debug, mais PAS du HTML ni autre gadget.
-        st.code(result.stdout[:1000], language="text")
-        return None
+    # --- Normalisation en DataFrame ---
+    rows = []
+    for s in subs:
+        if isinstance(s, dict):
+            rows.append(s)
+        else:
+            # objets Submission -> dict "safe"
+            d = {}
+            for k in dir(s):
+                if k.startswith("_"):
+                    continue
+                try:
+                    v = getattr(s, k)
+                except Exception:
+                    continue
+                if isinstance(v, (str, int, float, bool)) or v is None:
+                    d[k] = v
+            rows.append(d)
+
+    df = pd.DataFrame(rows)
+
+    # Petit nettoyage : certaines versions renvoient des colonnes un peu différentes
+    # On essaie d'uniformiser les noms courants
+    rename_map = {
+        "date": "date",
+        "submissionDate": "date",
+        "description": "description",
+        "fileName": "fileName",
+        "publicScore": "publicScore",
+        "privateScore": "privateScore",
+        "status": "status",
+    }
+    for k, v in list(rename_map.items()):
+        if k in df.columns and k != v:
+            df = df.rename(columns={k: v})
+
+    # Si une colonne date existe, on la parse
+    if "date" in df.columns:
+        try:
+            df["date"] = pd.to_datetime(df["date"])
+        except Exception:
+            pass
+
+    return df
+
+
 
 def fake_reco_service(sub_df, items_df, user_id, liked_item_ids, top_k=10):
     """
@@ -2262,34 +2482,84 @@ def get_kaggle_credentials():
     # On ne montre que le top 30 pour que ça reste lisible en démo
     render_pretty_table(df_lb.head(30), max_height=380)
 
-def render_kaggle_submissions_minimal(df_sub):
-    if df_sub is None or df_sub.empty:
-        st.info("Aucune submission trouvée.")
+def render_kaggle_submissions_table(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.info("Aucune submission valide avec score public.")
         return
 
-    # On ne garde que la date
-    cols = []
-    if "date" in df_sub.columns:
-        cols.append("date")
-    if "description" in df_sub.columns:
-        cols.append("description")
-    if not cols:
-        st.info("Impossible d'afficher les submissions (pas de colonne date).")
+    # Sécuriser le nom de la colonne score (au cas où)
+    if "public_score" not in df.columns:
+        st.error("❌ Colonne 'public_score' introuvable après prepare_kaggle_submissions_view().")
+        st.write("Colonnes reçues :", list(df.columns))
         return
 
-    df = df_sub[cols].copy()
+    best_score = df["public_score"].max()
 
-    # Séparer date et heure pour un affichage propre
+    df_display = df.copy()
+
+    # Ajout badge BEST
+    df_display["badge"] = df_display["public_score"].apply(lambda s: "👑 BEST" if s == best_score else "")
+
+    # Format date
+    if "date" in df_display.columns:
+        df_display["date"] = pd.to_datetime(df_display["date"], errors="coerce")
+        df_display["date"] = df_display["date"].dt.strftime("%Y-%m-%d %H:%M")
+
+    # Colonnes visibles (dans l'ordre demandé)
+    cols_order = []
+    for c in ["public_score", "team", "description", "date", "submitted_by", "status", "badge"]:
+        if c in df_display.columns:
+            cols_order.append(c)
+    df_display = df_display[cols_order]
+
+    # Renommage “UI”
+    df_ui = df_display.rename(columns={
+        "public_score": "🏅 Public score",
+        "team": "👥 Team",
+        "description": "📝 Description",
+        "date": "🕒 Date",
+        "submitted_by": "🙋 Submitted by",
+        "status": "📌 Status",
+        "badge": "⭐",
+    })
+
+    best_label = f"{best_score:.5f}" if pd.notna(best_score) else "N/A"
+    st.markdown(f"#### 👑 Meilleur score : **{best_label}** (ligne mise en évidence)")
+
+    # Highlight sur la colonne UI "🏅 Public score"
+    score_col = "🏅 Public score"
+
+    def highlight_best(row):
+        try:
+            val = float(row[score_col])
+        except Exception:
+            return [""] * len(row)
+
+        if pd.notna(val) and val == best_score:
+            return [
+                "background: linear-gradient(90deg, rgba(34,197,94,0.35), rgba(16,185,129,0.18));"
+                "color:#ecfdf5;"
+                "font-weight:800;"
+                "border-left:6px solid #22c55e;"
+                "box-shadow: inset 0 0 18px rgba(34,197,94,0.55);"
+            ] * len(row)
+
+        return [""] * len(row)
+
+    styled = (
+        df_ui.style
+        .apply(highlight_best, axis=1)
+        .format({score_col: "{:.5f}"})
+    )
+
+    # IMPORTANT: Streamlit affiche bien un Styler, mais si jamais ça bug sur certaines versions,
+    # on fallback sur st.dataframe(df_ui)
     try:
-        df["date"] = pd.to_datetime(df["date"])
-        df["Jour"] = df["date"].dt.strftime("%Y-%m-%d")
-        df["Heure"] = df["date"].dt.strftime("%H:%M:%S")
-        df = df[["Jour", "Heure", "description"]] if "description" in df.columns else df[["Jour", "Heure"]]
-    except:
-        pass
+        st.dataframe(styled, height=360, use_container_width=True)
+    except Exception:
+        st.dataframe(df_ui, height=360, use_container_width=True)
 
-    st.markdown("### 🕒 Historique des submissions")
-    st.dataframe(df, height=300)
+
 def page_train_full_model():
     st.markdown("## 🏆 Espace Kaggle : générer & envoyer le submission")
 
@@ -2325,27 +2595,20 @@ def page_train_full_model():
         if st.button("📤 Envoyer `submission.csv` sur Kaggle", key="btn_submit_kaggle_simple"):
             kaggle_submit_submission(SUBMISSION_FILE, submission_msg)
 
-    st.markdown("---")
+    
 
     # ========== 3) Historique des submissions ==========
-    st.markdown("### 3️⃣ Historique de tes submissions Kaggle")
-
-    st.markdown(
-        "<p style='color:#9ca3af; font-size:0.9rem;'>"
-        "Clique sur le bouton ci-dessous pour recharger l'historique à chaque fois que tu fais une nouvelle submission."
-        "</p>",
-        unsafe_allow_html=True,
-    )
-
-    # Le simple fait de cliquer relance le script Streamlit → ça suffit comme "refresh"
-    st.button("🔄 Recharger les submissions Kaggle", key="btn_refresh_submissions")
-
     df_sub = kaggle_list_submissions()
-    if df_sub is not None and not df_sub.empty:
-        # Affichage simple mais propre (utilise ta fonction déjà stylée)
-        render_pretty_table(df_sub, max_height=380)
-    else:
-        st.info("Aucune submission trouvée sur Kaggle (ou bien la commande Kaggle a échoué).")
+
+    df_view = prepare_kaggle_submissions_view(df_sub)
+
+    st.markdown("### 📤 Submissions Kaggle (scores valides)")
+    render_kaggle_submissions_table(df_view)
+
+    st.markdown("### 📈 Évolution du score public")
+    render_kaggle_score_progression(df_view)
+    st.markdown("---")
+
 # ==========================
 #           MAIN
 # ==========================
