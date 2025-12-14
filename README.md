@@ -1,6 +1,6 @@
 # AI Librarian: Hybrid Recommender System 📚
 
-**Team Name**: [Your Team Name]
+**Team Name**: Ouchy
 **Kaggle Score**: ~0.17 (MAP@10)
 
 ## 1. Executive Summary
