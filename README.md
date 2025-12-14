@@ -134,10 +134,12 @@ We evaluated our system using a rigorous **Time-Aware Split (70/30)**. This stra
 ---
 
 ## 8. AI-Assisted Coding
-This project was built with the assistance of **Google's Agentic AI**.
-*   **Role**: The AI helped architect the Two-Stage pipeline, debugged the LightGCN implementation, and optimized the ensemble weights.
-*   **Reflection**: The AI accelerated the "boilerplate" coding (DataLoaders, Training Loops), allowing us to focus on high-level strategy (Feature Engineering, Model Selection).
-
+This project was built with the assistance of **Google's Agentic AI**. We leveraged AI as an "agentic" support system primarily when facing blockers, specifically to:
+*   Identify relevant sources, sites, and endpoints (e.g., public book APIs).
+*   Generate inspiration and ideas (candidate features, overall strategies).
+*   Accelerate debugging and boilerplate code (data loading, pipelines, scripts).
+*   Challenge specific decisions (e.g., "Is data enrichment worth the cost?").
+*   We emphasize that while AI served as an accelerator, the final choices—regarding architecture, features, evaluation, and trade-offs—were driven by the team.
 ---
 
 ## 9. Execution Guide
@@ -195,134 +197,103 @@ Here is a detailed description of each Python script in the project to facilitat
 *   **`generate_report.py`**: Automatically compiles a comprehensive performance report.
 *   **`generate_examples.py`**: Extracts qualitative recommendation examples (successes and failures) to illustrate model behavior in the report.
 
+---
 
+## 11. Data Enrichment via Public Book APIs (Google Books + OpenLibrary)
 
+### 🎯 Objective
 
-11. Data Enrichment via Public Book APIs (Google Books + OpenLibrary)
+At the very beginning of the project, we decided to enrich the book database (items) with missing metadata in order to:
+* Better handle the **cold start** problem (items with little to no user history).
+* Strengthen **content-based retrieval** and semantic features.
+* Standardize fields for future feature engineering (language, pages, year, summary, etc.).
 
-🎯 Objectif
+Concretely, we added the following columns to our items file:
+* `summary` (description/abstract)
+* `published_year` (publication date)
+* `page_count` (number of pages)
+* `language` (language code)
 
-Au tout début du projet, on a décidé d’enrichir la base de données des livres (items) avec des métadonnées manquantes afin de :
-	•	mieux gérer le cold start (peu ou pas d’historique utilisateur),
-	•	renforcer le content-based retrieval et les features sémantiques,
-	•	disposer de champs homogènes pour de futures features (langue, pages, année, résumé, etc.).
+We hypothesized that richer descriptions combined with language, year, and page counts would capture item similarity better and significantly assist in "cold-start" scenarios.
 
-Concrètement, on a ajouté des colonnes supplémentaires dans notre fichier items (Excel) :
-	•	summary (description/résumé)
-	•	published_year (année / date de publication)
-	•	page_count (nombre de pages)
-	•	language (langue)
+### 📚 Key Challenge: Multiple ISBNs per Book
 
-On pensait que des descriptions plus riches + langue/année/pages permettraient de mieux capturer la similarité entre livres et d’aider fortement les utilisateurs “cold-start”.
+In our dataset, a single book entity often possesses multiple ISBNs (ISBN-10/ISBN-13, different editions, variations, etc.). Therefore, enriching "one book" required querying multiple ISBNs and intelligently merging the results.
 
-⸻
+**Process:**
+1.  **Parse:** Split ISBN cells (often separated by `;` or `,`) to get a clean list.
+2.  **Structure:** Created an `isbn_list` (list of ISBNs per row) and identified a `first_isbn` (primary).
+3.  **Deduplicate:** Built a `unique_isbns` set to avoid redundant API calls.
 
-📚 Problème clé : un livre peut avoir plusieurs ISBN
+### 🔌 APIs Used & Fallback Strategy (Pipeline)
 
-Dans notre dataset, un même livre possède parfois plusieurs ISBN (ISBN-10/ISBN-13, éditions différentes, variantes, etc.).
-Donc enrichir “un livre” = tester et interroger plusieurs ISBN, puis fusionner intelligemment les résultats.
+We implemented a 3-step strategy using two public sources:
 
-On a donc :
-	1.	parsé chaque cellule ISBN (souvent séparée par ; ou ,) pour obtenir une liste propre,
-	2.	créé isbn_list (liste d’ISBN par ligne) et first_isbn (ISBN principal),
-	3.	construit un ensemble unique_isbns pour éviter de re-caller les APIs en doublon.
+**1. Google Books API (Primary)**
+* **Endpoint:** `https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}`
+* **Pros:** Generally strong on descriptions, page counts, language, and dates.
+* **Data retrieved:** `description`, `publishedDate`, `pageCount`, `language`.
 
-⸻
+**2. OpenLibrary API via ISBN (Fallback)**
+* **Endpoint:** `https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&jscmd=details&format=json`
+* **Pros:** Sometimes covers books missing from Google; provides alternative fields.
+* **Implementation details:**
+    * If `description` is empty, we attempt to fallback on the `notes` field.
+    * For language, we parse OpenLibrary specific keys (e.g., `/languages/fre`).
 
-🔌 APIs utilisées et stratégie de fallback (pipeline)
+**3. OpenLibrary via Title + Author Search (Final Fallback)**
+* **Logic:** If the summary is still missing after checking ISBNs, we perform a search.
+* **Endpoint:** `https://openlibrary.org/search.json?title=...&author=...&limit=1`
+* **Note:** We then fetch the specific `/works/...` endpoint to get the description.
+* **Constraint:** This step is slower and "noisier," so it is only executed if the summary is missing to limit costs and errors.
 
-On a utilisé deux sources publiques et une stratégie en 3 étapes :
+### 🧠 Intelligent Merging Logic
 
-1) Google Books API (premier choix)
-	•	Endpoint : https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}
-	•	Avantages : souvent bon sur description, pageCount, language, date
-	•	On récupère : description, publishedDate, pageCount, language
+We implemented a robust fusion strategy:
+* Initialize an `empty_record` with target fields set to `None`.
+* For each API call (Google followed by OpenLibrary), we **only fill fields that are currently missing**.
+* If one ISBN doesn't provide all data, we iterate to the next ISBN for the same book.
 
-2) OpenLibrary API via ISBN (fallback)
-	•	Endpoint : https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&jscmd=details&format=json
-	•	Avantages : parfois meilleur sur certains livres, champs présents quand Google est vide
-	•	Astuces implémentées :
-	•	Si description est vide, on tente un fallback sur notes
-	•	Pour la langue, OpenLibrary renvoie parfois un “key” type /languages/fre
+**Why?**
+The dataset contains cases where:
+* *ISBN A* → Has the language but no summary.
+* *ISBN B* → Has the summary but no page count.
+➡️ We "complete" the book record by accumulating the best available information.
 
-3) OpenLibrary via recherche titre + auteur (fallback final, plus lent)
-Quand le résumé manque encore, on lance une recherche :
-	•	Endpoint : https://openlibrary.org/search.json?title=...&author=...&limit=1
-Puis on va chercher la work (/works/...) pour récupérer une description si possible.
+### ⚡ Performance: Parallel Calls (ThreadPool)
 
-Important : cette 3ème étape est plus lente et plus “bruitée”, donc on ne l’exécute que si le résumé est manquant, pour limiter le coût et les erreurs.
+To handle the large volume of ISBNs, we parallelized the API requests:
+* `ThreadPoolExecutor(max_workers=20)`
+* `timeout=5s` per request
+* Global mapping `isbn_to_data[isbn] = meta`
 
-⸻
+Finally, we reconstruct the final metadata at the dataset row level by iterating through the `isbn_list` until "core" fields are filled, exporting the result to an enriched Excel file (e.g., `books_enriched_....xlsx`).
 
-🧠 Fusion des résultats (merge “intelligent”)
+### ✅ Real-World Result: High Effort, Zero Gain
 
-On a implémenté une logique de fusion simple et robuste :
-	•	On initialise un enregistrement “vide” (empty_record) avec les champs cibles à None
-	•	À chaque appel API (Google puis OpenLibrary), on remplit uniquement les champs encore manquants
-	•	Si un ISBN ne fournit pas tout, on teste les ISBN suivants du même livre
+Although data enrichment seemed logically essential at the start, we found that it **did not improve model performance** (neither on Kaggle nor in local validation), despite:
+* Adding summaries (`summary`).
+* Creating derived features (language/year/pages).
+* Hoping for a significant boost on cold-start items.
 
-Pourquoi ?
-Parce que le dataset contient des cas où :
-	•	ISBN A → a la langue mais pas de résumé
-	•	ISBN B → a le résumé mais pas le nombre de pages
-➡️ on veut donc “compléter” un livre en cumulant les meilleures infos disponibles.
+**Retrospective:**
+* The strongest signal came primarily from **interactions** (Collaborative Filtering + Sequential) and expert scores in LTR.
+* The quality of retrieved summaries was inconsistent (often empty, noisy, or in the wrong language).
+* The impact on `MAP@10` was insignificant or null.
 
-⸻
+👉 **Conclusion:** It was a good "product" intuition, but in the context of this challenge, it mostly resulted in lost time during the early phase. We subsequently refocused our efforts on the **Two-Stage + LTR** approach, which actually drove performance.
 
-⚡ Performance : appels parallèles (ThreadPool)
+---
 
-Comme il fallait traiter beaucoup d’ISBN, on a parallélisé les requêtes API :
-	•	ThreadPoolExecutor(max_workers=20)
-	•	timeout=5s par requête
-	•	mapping global isbn_to_data[isbn] = meta
+## 12. Collaboration & Support (Cross-Group Exchanges & Assistants)
 
-Ensuite, au niveau ligne du dataset, on reconstruit les métadonnées finales en parcourant isbn_list et en fusionnant jusqu’à ce que les champs “core” soient remplis.
-
-Enfin, on exporte un Excel enrichi (ex. books_enriched_....xlsx) avec les colonnes ajoutées.
-
-⸻
-
-✅ Résultat réel : effort important, gain nul (et du temps perdu)
-
-Même si l’enrichissement semblait “logiquement” essentiel au début, on a constaté que ça n’a pas amélioré la performance du modèle (Kaggle + validation locale), malgré :
-	•	l’ajout de résumés (summary),
-	•	les features dérivées (langue / année / pages),
-	•	et l’espoir d’un gros boost sur cold-start.
-
-Au final :
-	•	le signal le plus fort venait surtout des interactions (CF + séquentiel) et des expert scores en LTR,
-	•	la qualité des résumés récupérés était inégale (souvent vide, parfois bruitée, parfois langue incohérente),
-	•	et l’effet sur MAP@10 était non significatif, voire nul.
-
-👉 Avec le recul : c’était une bonne intuition “produit”, mais dans ce challenge, ça nous a surtout fait perdre du temps en début de projet. On a ensuite recentré l’effort sur le Two-Stage + LTR, qui a réellement porté la performance.
-
-⸻
-
-12. Collaboration & Support (échanges inter-groupes + assistants)
-
-On a également bénéficié d’échanges avec :
-	•	un autre groupe d’étudiants (“Genève”)
-	•	et deux assistants :
-	•	Donia Gasmii
-	•	Stergios Konstantinidis
-
-Ces échanges nous ont aidés à :
-	•	confronter nos hypothèses (validation time-aware, leakage, etc.),
-	•	discuter des stratégies de candidats (tail vs popularité),
-	•	clarifier certains points de pipeline et d’évaluation,
-	•	et débloquer des décisions de modélisation (LTR vs stacking, robustesse, etc.).
-
-⸻
-
-13. Usage de l’IA pendant les blocages
-
-On a utilisé l’IA comme support “agentic” surtout quand on était bloqués, notamment pour :
-	•	trouver des sources / sites / endpoints pertinents (ex. APIs publiques livres),
-	•	obtenir des idées d’inspiration (features candidates, stratégies d’ensemble),
-	•	accélérer le debug et le boilerplate (chargement, pipeline, scripts),
-	•	challenger certaines décisions (ex. “est-ce que l’enrichissement vaut le coût ?”).
-
-On précise que l’IA a été un accélérateur, mais que les choix finaux (architecture, features, évaluation, arbitrages) ont été pilotés par l’équipe.
-
-
+We also benefited from discussions with:
+*   Another student group ("Geneva"),
+*   And the two assistants: Donia Gasmii and Stergios Konstantinidis.
+  
+These interactions helped us to:
+*   Challenge our hypotheses (time-aware validation, data leakage, etc.),
+*   Discuss candidate strategies (long-tail vs. popularity),
+*   Clarify specific aspects of the pipeline and evaluation,
+*   Resolve modeling decisions (LTR vs. stacking, robustness, etc.).
 
