@@ -11,6 +11,10 @@ This project implements a state-of-the-art **Two-Stage Hybrid Recommender System
 ## 2. Exploratory Data Analysis (EDA)
 We analyzed the interaction dataset and book metadata to understand the challenges.
 
+- **Total Users**: 7838
+- **Total Items**: 15109
+- **Total Interactions**: 87047
+
 *   **Sparsity**: The dataset is extremely sparse (**99.93%**), meaning most users have interacted with a tiny fraction of the 15,000+ books.
 *   **Long Tail**: A small number of "blockbuster" books account for a disproportionate number of reads, while thousands of books are rarely read.
 *   **User Activity**: Follows a power-law distribution. Most users are "Cold Start" (few interactions), while a few "Power Users" have hundreds.
