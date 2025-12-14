@@ -195,3 +195,134 @@ Here is a detailed description of each Python script in the project to facilitat
 *   **`generate_report.py`**: Automatically compiles a comprehensive performance report.
 *   **`generate_examples.py`**: Extracts qualitative recommendation examples (successes and failures) to illustrate model behavior in the report.
 
+
+
+
+11. Data Enrichment via Public Book APIs (Google Books + OpenLibrary)
+
+🎯 Objectif
+
+Au tout début du projet, on a décidé d’enrichir la base de données des livres (items) avec des métadonnées manquantes afin de :
+	•	mieux gérer le cold start (peu ou pas d’historique utilisateur),
+	•	renforcer le content-based retrieval et les features sémantiques,
+	•	disposer de champs homogènes pour de futures features (langue, pages, année, résumé, etc.).
+
+Concrètement, on a ajouté des colonnes supplémentaires dans notre fichier items (Excel) :
+	•	summary (description/résumé)
+	•	published_year (année / date de publication)
+	•	page_count (nombre de pages)
+	•	language (langue)
+
+On pensait que des descriptions plus riches + langue/année/pages permettraient de mieux capturer la similarité entre livres et d’aider fortement les utilisateurs “cold-start”.
+
+⸻
+
+📚 Problème clé : un livre peut avoir plusieurs ISBN
+
+Dans notre dataset, un même livre possède parfois plusieurs ISBN (ISBN-10/ISBN-13, éditions différentes, variantes, etc.).
+Donc enrichir “un livre” = tester et interroger plusieurs ISBN, puis fusionner intelligemment les résultats.
+
+On a donc :
+	1.	parsé chaque cellule ISBN (souvent séparée par ; ou ,) pour obtenir une liste propre,
+	2.	créé isbn_list (liste d’ISBN par ligne) et first_isbn (ISBN principal),
+	3.	construit un ensemble unique_isbns pour éviter de re-caller les APIs en doublon.
+
+⸻
+
+🔌 APIs utilisées et stratégie de fallback (pipeline)
+
+On a utilisé deux sources publiques et une stratégie en 3 étapes :
+
+1) Google Books API (premier choix)
+	•	Endpoint : https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}
+	•	Avantages : souvent bon sur description, pageCount, language, date
+	•	On récupère : description, publishedDate, pageCount, language
+
+2) OpenLibrary API via ISBN (fallback)
+	•	Endpoint : https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&jscmd=details&format=json
+	•	Avantages : parfois meilleur sur certains livres, champs présents quand Google est vide
+	•	Astuces implémentées :
+	•	Si description est vide, on tente un fallback sur notes
+	•	Pour la langue, OpenLibrary renvoie parfois un “key” type /languages/fre
+
+3) OpenLibrary via recherche titre + auteur (fallback final, plus lent)
+Quand le résumé manque encore, on lance une recherche :
+	•	Endpoint : https://openlibrary.org/search.json?title=...&author=...&limit=1
+Puis on va chercher la work (/works/...) pour récupérer une description si possible.
+
+Important : cette 3ème étape est plus lente et plus “bruitée”, donc on ne l’exécute que si le résumé est manquant, pour limiter le coût et les erreurs.
+
+⸻
+
+🧠 Fusion des résultats (merge “intelligent”)
+
+On a implémenté une logique de fusion simple et robuste :
+	•	On initialise un enregistrement “vide” (empty_record) avec les champs cibles à None
+	•	À chaque appel API (Google puis OpenLibrary), on remplit uniquement les champs encore manquants
+	•	Si un ISBN ne fournit pas tout, on teste les ISBN suivants du même livre
+
+Pourquoi ?
+Parce que le dataset contient des cas où :
+	•	ISBN A → a la langue mais pas de résumé
+	•	ISBN B → a le résumé mais pas le nombre de pages
+➡️ on veut donc “compléter” un livre en cumulant les meilleures infos disponibles.
+
+⸻
+
+⚡ Performance : appels parallèles (ThreadPool)
+
+Comme il fallait traiter beaucoup d’ISBN, on a parallélisé les requêtes API :
+	•	ThreadPoolExecutor(max_workers=20)
+	•	timeout=5s par requête
+	•	mapping global isbn_to_data[isbn] = meta
+
+Ensuite, au niveau ligne du dataset, on reconstruit les métadonnées finales en parcourant isbn_list et en fusionnant jusqu’à ce que les champs “core” soient remplis.
+
+Enfin, on exporte un Excel enrichi (ex. books_enriched_....xlsx) avec les colonnes ajoutées.
+
+⸻
+
+✅ Résultat réel : effort important, gain nul (et du temps perdu)
+
+Même si l’enrichissement semblait “logiquement” essentiel au début, on a constaté que ça n’a pas amélioré la performance du modèle (Kaggle + validation locale), malgré :
+	•	l’ajout de résumés (summary),
+	•	les features dérivées (langue / année / pages),
+	•	et l’espoir d’un gros boost sur cold-start.
+
+Au final :
+	•	le signal le plus fort venait surtout des interactions (CF + séquentiel) et des expert scores en LTR,
+	•	la qualité des résumés récupérés était inégale (souvent vide, parfois bruitée, parfois langue incohérente),
+	•	et l’effet sur MAP@10 était non significatif, voire nul.
+
+👉 Avec le recul : c’était une bonne intuition “produit”, mais dans ce challenge, ça nous a surtout fait perdre du temps en début de projet. On a ensuite recentré l’effort sur le Two-Stage + LTR, qui a réellement porté la performance.
+
+⸻
+
+12. Collaboration & Support (échanges inter-groupes + assistants)
+
+On a également bénéficié d’échanges avec :
+	•	un autre groupe d’étudiants (“Genève”)
+	•	et deux assistants :
+	•	Donia Gasmii
+	•	Stergios Konstantinidis
+
+Ces échanges nous ont aidés à :
+	•	confronter nos hypothèses (validation time-aware, leakage, etc.),
+	•	discuter des stratégies de candidats (tail vs popularité),
+	•	clarifier certains points de pipeline et d’évaluation,
+	•	et débloquer des décisions de modélisation (LTR vs stacking, robustesse, etc.).
+
+⸻
+
+13. Usage de l’IA pendant les blocages
+
+On a utilisé l’IA comme support “agentic” surtout quand on était bloqués, notamment pour :
+	•	trouver des sources / sites / endpoints pertinents (ex. APIs publiques livres),
+	•	obtenir des idées d’inspiration (features candidates, stratégies d’ensemble),
+	•	accélérer le debug et le boilerplate (chargement, pipeline, scripts),
+	•	challenger certaines décisions (ex. “est-ce que l’enrichissement vaut le coût ?”).
+
+On précise que l’IA a été un accélérateur, mais que les choix finaux (architecture, features, évaluation, arbitrages) ont été pilotés par l’équipe.
+
+
+
