@@ -1923,7 +1923,7 @@ def page_home(sub_df, items_df, interactions_df, logged_in_user):
                     align-items:center;
                     gap:4px;
                 ">
-                    🏆 2e Kaggle
+                    🏆🥉 3e Kaggle
                 </div>
                 <br>
                 <div style="font-size:2rem; color:#9ca3af;">💪 Performance du modèle</div>
