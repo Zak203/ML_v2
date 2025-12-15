@@ -3,6 +3,9 @@
 **Team Name**: Ouchy
 **Kaggle Score**: 0.17689 (MAP@10)
 
+Online App URL, Try It :
+https://machine-learning-hec.streamlit.app
+
 ## 1. Executive Summary
 This project implements a state-of-the-art **Two-Stage Hybrid Recommender System** designed to predict the top 10 books a user is likely to borrow next. By combining the strengths of Collaborative Filtering, Content-Based retrieval, and Sequential Modeling with a powerful Learning-to-Rank (LTR) approach, we achieved a **36% performance improvement** over the best single baseline model. While we initially explored a Stacking Ensemble, our final submission utilizes a **Single CatBoost Model** as it demonstrated superior generalization and robustness on the leaderboard.
 
