@@ -13,6 +13,7 @@ from kaggle.api.kaggle_api_extended import KaggleApi
 import json
 import requests
 import shutil
+import streamlit.components.v1 as components
 
 # ==========================
 #    CONFIG & CONSTANTES
@@ -34,6 +35,29 @@ MODEL_SCRIPT = ROOT_DIR / "create_submission.py"   # script du modèle
 GIF_PATH = BASE_DIR / "Mapping for machine learning.gif"
 LOCAL_KAGGLE = BASE_DIR / "kaggle.json"
 fast_script = ROOT_DIR / "generate_submission_fast.py"
+
+AVATAR_1 = BASE_DIR / "image.png"
+AVATAR_2 = BASE_DIR / "image2.png"
+
+def _file_to_b64(path: Path) -> str | None:
+    try:
+        if path and path.exists():
+            return base64.b64encode(path.read_bytes()).decode()
+    except Exception:
+        pass
+    return None
+
+def get_avatar_b64_for_submitter(submitter: str) -> str | None:
+    """
+    Mapping simple:
+      - yoannmetry -> image.png
+      - sinon -> image2.png (si existe)
+      - sinon -> None (fallback initiales)
+    """
+    s = (submitter or "").strip().lower()
+    if s == "yoannmetry":
+        return _file_to_b64(AVATAR_1)
+    return _file_to_b64(AVATAR_2)
 
 def setup_kaggle_credentials():
     """
@@ -69,6 +93,77 @@ setup_kaggle_credentials()
 CUSTOM_CSS = """
 <style>
 
+    /* ========== SUBMITTERS ROW (KAGGLE) ========== */
+    .submitters-row {
+        display: flex;
+        gap: 14px;
+        overflow-x: auto;
+        padding: 10px 6px;
+        margin-top: 10px;
+        border-radius: 16px;
+        border: 1px solid rgba(148,163,184,0.25);
+        background: rgba(2,6,23,0.55);
+    }
+
+    .submitter-chip {
+        min-width: 160px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(148,163,184,0.25);
+        background: rgba(15,23,42,0.7);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+    }
+
+    .submitter-avatar {
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        object-fit: cover;
+        border: 2px solid rgba(96,165,250,0.65);
+        box-shadow: 0 0 18px rgba(59,130,246,0.35);
+    }
+
+    .submitter-initials {
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        color: #e5e7eb;
+        border: 2px solid rgba(96,165,250,0.65);
+        background: radial-gradient(circle at 30% 20%, rgba(96,165,250,0.55), rgba(168,85,247,0.35), rgba(2,6,23,0.9));
+        box-shadow: 0 0 18px rgba(59,130,246,0.35);
+    }
+
+    .submitter-name {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #e5e7eb;
+        line-height: 1.05;
+    }
+
+    .submitter-count {
+        font-size: 0.75rem;
+        color: #93c5fd;
+        opacity: 0.95;
+        margin-top: 2px;
+    }
+
+    .submitter-badge {
+        margin-left: auto;
+        font-size: 0.75rem;
+        font-weight: 800;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(34,197,94,0.14);
+        border: 1px solid rgba(34,197,94,0.35);
+        color: #bbf7d0;
+    }
     /* Fond général */
     .stApp {
         background: radial-gradient(circle at top left, #1f2933 0, #0b1120 40%, #020617 100%);
@@ -940,9 +1035,171 @@ CUSTOM_CSS = """
         overflow-y: auto;
     }
 
+    /* ===== BIG ROCKET (LOGIN) - NO SCROLL, NO HTML VISIBLE ===== */
+
+
+    /* trajectoire + rotation douce */
+    @keyframes rocketFly{
+    0%{transform:translate(-35vw,10vh) rotate(10deg); opacity:0}
+    10%{opacity:.9}
+    40%{transform:translate(30vw,42vh) rotate(55deg)}
+    70%{transform:translate(75vw,28vh) rotate(95deg)}
+    100%{transform:translate(140vw,80vh) rotate(140deg); opacity:0}
+    }
+
+    /* login au-dessus */
+    .login-card{ position:relative; z-index:5; }
+    
+    /* ===== FUNNY ALIEN + PORTAL (LOGIN BACKGROUND) ===== */
+    /* ===== FUNNY ALIEN + PORTAL (LOGIN BACKGROUND) ===== */
+
+
+/* mouvement */
+@keyframes alienFly{
+  0%   {transform:translate(-40vw,15vh); opacity:0}
+  10%  {opacity:1}
+  50%  {transform:translate(40vw,35vh)}
+  100% {transform:translate(140vw,70vh); opacity:0}
+}
+
+/* login au-dessus */
+.login-card{
+  position:relative;
+  z-index:5;
+}
+
+/* ===== ALIEN QUI PASSE DERRIÈRE UN PORTAIL ===== */
+
+
+@keyframes alienMove{
+  0%   {transform:translateX(-300px); opacity:0}
+  10%  {opacity:1}
+  50%  {transform:translateX(40vw)}
+  100% {transform:translateX(120vw); opacity:0}
+}
+
+/* le login AU-DESSUS */
+.login-card{
+  position:relative;
+  z-index:5;
+}
+
 </style>
 """
+
+def gif_to_b64(path):
+    import base64
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+        
+import re
+
+@st.cache_data(show_spinner=False)
+def fetch_kaggle_avatar_url(username: str) -> str | None:
+    """
+    Tente de récupérer l'avatar Kaggle depuis la page publique du user.
+    Fallback = None si introuvable.
+    """
+    if not username or not str(username).strip():
+        return None
+
+    url = f"https://www.kaggle.com/{username}"
+    try:
+        r = requests.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return None
+
+        html = r.text
+
+        # Kaggle injecte souvent des champs du type "avatarUrl":"https:\/\/...jpg"
+        m = re.search(r'"avatarUrl"\s*:\s*"([^"]+)"', html)
+        if m:
+            avatar = m.group(1).replace("\\u002F", "/").replace("\\/", "/")
+            # parfois c'est relatif
+            if avatar.startswith("/"):
+                avatar = "https://www.kaggle.com" + avatar
+            return avatar
+
+        # fallback OG image (moins fiable)
+        m2 = re.search(r'property="og:image"\s+content="([^"]+)"', html)
+        if m2:
+            return m2.group(1)
+
+    except Exception:
+        return None
+
+    return None
+
+
+
+def render_submitters_row(df_sub_raw: pd.DataFrame):
+    if df_sub_raw is None or df_sub_raw.empty:
+        st.info("Aucune submission disponible.")
+        return
+
+    df = df_sub_raw.copy()
+
+    # Normaliser le champ submitted_by
+    for c in ["submitted_by", "submittedBy", "SubmittedBy", "username", "userName"]:
+        if c in df.columns:
+            df = df.rename(columns={c: "submitted_by"})
+            break
+
+    if "submitted_by" not in df.columns:
+        st.info("Colonne 'submitted_by' introuvable.")
+        return
+
+    counts = (
+        df["submitted_by"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .replace("", pd.NA)
+        .dropna()
+        .value_counts()
+        .head(10)
+    )
+
+    if counts.empty:
+        st.info("Aucun submitter détecté.")
+        return
+
+    chips_html = ""
+
+    for username, n in counts.items():
+        avatar_b64 = get_avatar_b64_for_submitter(username)
+
+        if avatar_b64:
+            avatar_html = (
+                f'<img class="submitter-avatar" '
+                f'src="data:image/png;base64,{avatar_b64}" '
+                f'alt="{username}">'
+            )
+        else:
+            initials = (username[:2] or "👤").upper()
+            avatar_html = f'<div class="submitter-initials">{initials}</div>'
+
+        chips_html += (
+            '<div class="submitter-chip">'
+                f'{avatar_html}'
+                '<div>'
+                    f'<div class="submitter-name">{username}</div>'
+                    f'<div class="submitter-count">{n} submission(s)</div>'
+                '</div>'
+                f'<div class="submitter-badge">× {n}</div>'
+            '</div>'
+        )
+
+    st.markdown("#### 👥 Submissions par personne")
+    st.markdown(
+        f'<div class="submitters-row">{chips_html}</div>',
+        unsafe_allow_html=True
+    )
+
+
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
 def render_pretty_table(df: pd.DataFrame, max_height: int = 420):
     """Affiche un tableau stylé avec CSS custom."""
     if df is None or df.empty:
@@ -1074,7 +1331,71 @@ def kaggle_submit_submission(submission_path: Path, message: str):
     st.success("📤 Submission envoyée sur Kaggle avec succès !")
     return True
 
+ROCKET_HTML = """
+<style>
+/* Cache totalement l'iframe + pas de texte qui fuit */
+html,body{margin:0;padding:0;background:transparent;overflow:hidden}
 
+/* Fusée “fond” */
+.rocket{
+  position:fixed;
+  left:-30vw; top:15vh;
+  width:320px; height:320px;
+  pointer-events:none;
+  opacity:.85;
+  z-index:0;
+  animation:fly 24s linear infinite;
+  filter: drop-shadow(0 0 18px rgba(147,197,253,.25));
+}
+
+/* Trajectoire + rotation douce */
+@keyframes fly{
+  0%{transform:translate(-35vw,10vh) rotate(12deg); opacity:0}
+  8%{opacity:.85}
+  35%{transform:translate(30vw,42vh) rotate(55deg)}
+  65%{transform:translate(75vw,28vh) rotate(95deg)}
+  100%{transform:translate(140vw,80vh) rotate(140deg); opacity:0}
+}
+
+/* Traînée courbe “non linéaire” */
+.trail{animation:trail 1.8s ease-in-out infinite; transform-origin:80% 50%}
+@keyframes trail{
+  0%,100%{opacity:.65; transform:skewY(.8deg) scaleX(.98)}
+  50%{opacity:.95; transform:skewY(-1.6deg) scaleX(1.06)}
+}
+</style>
+
+<div class="rocket">
+<svg viewBox="0 0 420 420" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"  stop-color="rgba(168,85,247,0)"/>
+      <stop offset="25%" stop-color="rgba(59,130,246,.18)"/>
+      <stop offset="60%" stop-color="rgba(147,197,253,.85)"/>
+      <stop offset="78%" stop-color="rgba(255,255,255,.95)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+    <filter id="b" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- traînée courbe -->
+  <g class="trail" filter="url(#b)">
+    <path d="M60 235 C140 185, 200 305, 280 240 S360 215, 395 245"
+          fill="none" stroke="url(#g)" stroke-width="24" stroke-linecap="round"/>
+  </g>
+
+  <!-- fusée simple -->
+  <g>
+    <ellipse cx="235" cy="235" rx="52" ry="30" fill="rgba(226,232,240,.95)"/>
+    <circle cx="230" cy="235" r="14" fill="rgba(15,23,42,.95)" stroke="rgba(147,197,253,.7)" stroke-width="2"/>
+    <path d="M285 235 C310 228, 335 235, 350 245 C335 255, 310 262, 285 235 Z"
+          fill="rgba(226,232,240,.95)"/>
+  </g>
+</svg>
+</div>
+"""
 def page_login(interactions_df):
     """Page de login avec ciel animé (étoiles + fusées)."""
     import random
@@ -1103,7 +1424,38 @@ def page_login(interactions_df):
             f'animation-delay:{delay}s; animation-duration:{duration}s;"></div>'
         )
 
+    components.html(ROCKET_HTML, height=1)
     # Injection dans la page
+    alien_b64 = _file_to_b64(BASE_DIR / "giphy.gif")
+
+    if alien_b64:
+        st.markdown(
+            f"""
+            <div style="
+                position:fixed;
+                top:35vh;
+                left:-260px;
+                width:260px;
+                height:140px;
+                background-image:url('data:image/gif;base64,{alien_b64}');
+                background-size:contain;
+                background-repeat:no-repeat;
+                pointer-events:none;
+                z-index:1;
+                animation: alienMove 24s linear infinite;
+            "></div>
+
+            <style>
+            @keyframes alienMove {{
+                0%   {{transform:translateX(-320px); opacity:0}}
+                10%  {{opacity:1}}
+                50%  {{transform:translateX(40vw)}}
+                100% {{transform:translateX(120vw); opacity:0}}
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
     st.markdown(particles_html + stars_html, unsafe_allow_html=True)
 
     # ============ GIF tout en haut, plus petit + flottant ============
@@ -2604,6 +2956,8 @@ def page_train_full_model():
 
     st.markdown("### 📤 Submissions Kaggle (scores valides)")
     render_kaggle_submissions_table(df_view)
+
+    render_submitters_row(df_sub)
 
     st.markdown("### 📈 Évolution du score public")
     render_kaggle_score_progression(df_view)
